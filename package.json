@@ -1,0 +1,36 @@
+{
+  "name": "laptop-assistant-jarvis",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "main": "desktop-dist/electron/main.mjs",
+  "scripts": {
+    "dev": "npm run build:desktop && concurrently -k \"vite --host 127.0.0.1\" \"wait-on http://127.0.0.1:5173 && electron . --dev\"",
+    "build:desktop": "tsc -p tsconfig.electron.json",
+    "build": "tsc -b && npm run build:desktop && vite build",
+    "test": "npm run build:desktop && node --test desktop-dist/electron/*.test.mjs",
+    "start": "electron .",
+    "lint": "oxlint",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "dotenv": "^18.0.7",
+    "lucide-react": "^1.55.0",
+    "playwright-core": "^1.64.0",
+    "react": "^19.2.8",
+    "react-dom": "^19.2.8",
+    "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "@types/node": "^24.13.3",
+    "@types/react": "^19.2.18",
+    "@types/react-dom": "^19.2.7",
+    "@vitejs/plugin-react": "^6.1.1",
+    "concurrently": "^10.0.6",
+    "electron": "^44.7.0",
+    "oxlint": "^1.81.0",
+    "typescript": "~6.0.2",
+    "vite": "^8.3.0",
+    "wait-on": "^9.5.1"
+  }
+}
