@@ -26,7 +26,6 @@ const api: JarvisBridge = {
   allowApp: (name) => ipcRenderer.invoke('permissions:allow-app', name),
   allowDownloads: () => ipcRenderer.invoke('permissions:allow-downloads'),
   allowWebsite: (url) => ipcRenderer.invoke('permissions:allow-website', url),
-  allowResearchAutopilot: () => ipcRenderer.invoke('permissions:allow-research-autopilot'),
   proposePython: (request) => ipcRenderer.invoke('python:propose', request),
   executePython: (id) => ipcRenderer.invoke('python:execute', id),
   rejectPython: (id) => ipcRenderer.invoke('python:reject', id),

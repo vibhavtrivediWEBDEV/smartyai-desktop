@@ -297,15 +297,6 @@ function App() {
     }
   }
 
-  async function allowResearchAutopilot() {
-    try {
-      setError('')
-      if (await window.jarvis?.allowResearchAutopilot()) setPermissions(await window.jarvis!.listPermissions())
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : 'Could not enable research autopilot.')
-    }
-  }
-
   const active = tasks.filter((task) => task.state === 'queued' || task.state === 'running')
   const recent = view === 'history' ? tasks : tasks.slice(0, 5)
 
@@ -329,7 +320,7 @@ function App() {
         <header className="topbar"><span><PanelLeft size={16} /> {view === 'assistant' ? 'Assistant' : view === 'history' ? 'Task history' : 'Permissions'}</span><span className="topbar-state"><Activity size={15} /> {active.length ? `${active.length} active` : 'Ready'}</span></header>
         {view === 'assistant' ? (
           <div className="main-body">
-            <div className="intro"><div className="eyebrow">YOUR WORKSPACE, ON YOUR TERMS</div><h1>What can I help with?</h1><p>Ask GLM-5, research public websites in Chrome, search a filename, or open a macOS app. Research site prompts can be managed in Permissions.</p></div>
+            <div className="intro"><div className="eyebrow">YOUR WORKSPACE, ON YOUR TERMS</div><h1>What can I help with?</h1><p>Ask GLM-5, research public websites in Chrome, search a filename, or open a macOS app. Jarvis asks before reading each new site.</p></div>
             <section className="composer" aria-label="Command input">
               <label htmlFor="command-input">Your command</label>
               <textarea ref={input} id="command-input" value={request} onChange={(event) => setRequest(event.target.value)} placeholder="Try ‘show time’ or ‘python: print 2 + 3’" rows={3} maxLength={4000} disabled={!available} onKeyDown={(event) => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); void submit() } }} />
@@ -381,14 +372,6 @@ function App() {
             <div className="eyebrow">YOUR CONTROL</div><h1>Permissions</h1>
             <p className="history-caption">Type “open Photos” or another installed app to request launch access when needed. You can revoke each app below. Folder search also asks as it goes. These grants do not provide macOS Full Disk Access or control other apps; Python runs only after you review its code.</p>
             {error && <p className="error" role="alert">{error}</p>}
-            <section className="research-setting" aria-label="Chrome research autopilot">
-              <h2>Chrome research</h2>
-              <p>Read public HTTPS research sources without asking about each site. Account sign-in stays in your hands; this does not allow form submission, downloads, or other commands.</p>
-              <label><input type="checkbox" checked={permissions.some((item) => item.capability === 'browser.research-autopilot' && item.scope === 'public-https' && item.state === 'granted' && !item.revokedAt)} disabled={!available} onChange={(event) => {
-                if (event.target.checked) void allowResearchAutopilot()
-                else { const grant = permissions.find((item) => item.capability === 'browser.research-autopilot' && item.scope === 'public-https' && item.state === 'granted' && !item.revokedAt); if (grant) void revoke(grant.id) }
-              }} /> Public HTTPS research autopilot</label>
-            </section>
             <form onSubmit={(event) => { event.preventDefault(); void chooseFolder() }}>
               <label htmlFor="folder-path">Folder path</label>
               <input id="folder-path" type="text" value={folderPath} onChange={(event) => setFolderPath(event.target.value)} placeholder="/Users/you/Documents" disabled={!available} />

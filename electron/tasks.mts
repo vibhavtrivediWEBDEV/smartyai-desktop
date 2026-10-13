@@ -18,7 +18,7 @@ export class TaskRunner {
     private readonly openFolder: (folder: 'downloads') => Promise<string> = async () => { throw new Error('Folder access is not configured.') },
     private readonly openWebsite: (url: string, browser?: 'safari') => Promise<string> = async () => { throw new Error('Website access is not configured.') },
     private readonly openVSCodeProject: (name: string) => Promise<string> = async () => { throw new Error('VS Code project access is not configured.') },
-    private readonly research: (topic: string, signal: AbortSignal, progress: (detail: string) => void) => Promise<string> = async () => { throw new Error('Chrome research is not configured.') },
+    private readonly research: (topic: string, signal: AbortSignal) => Promise<string> = async () => { throw new Error('Chrome research is not configured.') },
   ) {}
 
   list(): Task[] {
@@ -79,9 +79,7 @@ export class TaskRunner {
         this.controllers.set(id, controller)
         this.update(task, 'running', 'Working locally')
         try {
-          const detail = await this.execute(task.request, controller.signal, (progress) => {
-            if (!controller.signal.aborted) this.update(task, 'running', progress)
-          })
+          const detail = await this.execute(task.request, controller.signal)
           this.update(task, 'completed', detail)
         } catch (error) {
           const cancelled = controller.signal.aborted
@@ -96,15 +94,15 @@ export class TaskRunner {
     }
   }
 
-  private async execute(request: string, signal: AbortSignal, progress: (detail: string) => void): Promise<string> {
+  private async execute(request: string, signal: AbortSignal): Promise<string> {
     const normalized = request.toLowerCase().replace(/[?.!]$/, '').trim()
     const topic = parseBrowserResearch(request)
-    if (topic) return this.research(topic, signal, progress)
+    if (topic) return this.research(topic, signal)
     if (/^(?:delhi\s+(?:(?:todays?|today's|current)\s+)?time|(?:current\s+)?time\s+in\s+delhi)$/i.test(normalized)) {
       return `Delhi time: ${new Intl.DateTimeFormat('en-IN', { timeZone: 'Asia/Kolkata', dateStyle: 'full', timeStyle: 'long' }).format(new Date())}`
     }
     const liveTopic = parseLiveResearch(request)
-    if (liveTopic) return this.research(liveTopic, signal, progress)
+    if (liveTopic) return this.research(liveTopic, signal)
     const project = parseVSCodeProjectOpen(request)
     if (project) {
       if (signal.aborted) throw new Error('Cancelled')

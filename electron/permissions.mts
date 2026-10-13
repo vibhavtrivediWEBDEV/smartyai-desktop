@@ -12,7 +12,6 @@ export const capabilities = {
   'apps.open': { category: 'applications', description: 'Open selected applications', risk: 'low' },
   'browser.open': { category: 'browser', description: 'Open selected websites', risk: 'medium' },
   'browser.read': { category: 'browser', description: 'Read pages on selected websites', risk: 'medium' },
-  'browser.research-autopilot': { category: 'browser', description: 'Read public HTTPS sources during Chrome research without site prompts', risk: 'high' },
   'voice.record': { category: 'microphone', description: 'Capture microphone audio', risk: 'high' },
   'automation.run': { category: 'automation', description: 'Run approved automations', risk: 'high' },
   'schedule.manage': { category: 'scheduling', description: 'Create and run schedules', risk: 'medium' },
@@ -36,6 +35,12 @@ export const permissionSchema = z.strictObject({
 
 export type Permission = z.infer<typeof permissionSchema>
 const storeSchema = z.strictObject({ version: z.literal(1), permissions: z.array(permissionSchema) })
+const legacyPermissionSchema = z.strictObject({
+  ...permissionSchema.shape, capability: z.literal('browser.research-autopilot'), scope: z.literal('public-https'),
+})
+const legacyStoreSchema = z.strictObject({
+  version: z.literal(1), permissions: z.array(z.union([permissionSchema, legacyPermissionSchema])),
+})
 
 function canonicalFolder(folder: string): string {
   const resolved = realpathSync(folder)
@@ -68,7 +73,17 @@ export class PermissionManager {
 
   async load(): Promise<void> {
     try {
-      this.records = storeSchema.parse(JSON.parse(await readFile(this.file, 'utf8'))).permissions
+      const content = await readFile(this.file, 'utf8')
+      const stored = JSON.parse(content)
+      const current = storeSchema.safeParse(stored)
+      if (current.success) {
+        this.records = current.data.permissions
+      } else {
+        const legacy = legacyStoreSchema.parse(stored)
+        this.records = legacy.permissions.filter((record): record is Permission => record.capability !== 'browser.research-autopilot')
+        await writeFile(`${this.file}.${randomUUID()}.backup`, content, { flag: 'wx', mode: 0o600 })
+        await this.persist()
+      }
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw new Error('Permission store could not be loaded safely.', { cause: error })
     }
@@ -125,14 +140,6 @@ export class PermissionManager {
     const scope = websiteScope(value)
     return this.save({
       id: randomUUID(), capability: 'browser.read', scope, state: 'granted', source: 'user-decision',
-      createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
-      expiresAt: null, revokedAt: null, platform: this.platform, version: 1,
-    })
-  }
-
-  async grantResearchAutopilot(): Promise<Permission> {
-    return this.save({
-      id: randomUUID(), capability: 'browser.research-autopilot', scope: 'public-https', state: 'granted', source: 'user-decision',
       createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
       expiresAt: null, revokedAt: null, platform: this.platform, version: 1,
     })

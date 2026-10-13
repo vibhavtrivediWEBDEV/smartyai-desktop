@@ -58,7 +58,6 @@ export interface JarvisBridge {
   allowApp: (name: string) => Promise<PermissionView | null>
   allowDownloads: () => Promise<PermissionView | null>
   allowWebsite: (url: string) => Promise<PermissionView | null>
-  allowResearchAutopilot: () => Promise<PermissionView | null>
   proposePython: (request: string) => Promise<PythonProposal>
   executePython: (id: string) => Promise<string>
   rejectPython: (id: string) => Promise<void>

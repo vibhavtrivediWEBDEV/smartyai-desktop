@@ -115,20 +115,6 @@ test('explicit research delegates to the research session and cancellation abort
   assert.equal((await untilFinished(runner, task.id)).state, 'cancelled')
 })
 
-test('research reports Google failure in the live task', async () => {
-  const updates: Task[] = []
-  const runner = new TaskRunner((task) => updates.push(task), undefined, undefined, false, undefined, undefined, undefined, undefined, undefined,
-    async (_topic, _signal, progress) => {
-      progress('Google search unavailable. No other search provider will be used.')
-      throw new Error('Google search failed. No source-backed answer was generated.')
-    })
-  const submitted = runner.submit('research: monitor reviews')
-  const failed = await untilFinished(runner, submitted.id)
-  assert.equal(failed.state, 'failed')
-  assert.match(failed.detail, /Google search failed.*No source-backed answer/)
-  assert.ok(updates.some((task) => task.id === submitted.id && task.state === 'running' && task.detail === 'Google search unavailable. No other search provider will be used.'))
-})
-
 test('misspelled research comparison never falls through to ordinary chat', async () => {
   let requested = ''
   const runner = new TaskRunner(() => {}, undefined, async () => { throw new Error('Chat must not answer research') }, true,

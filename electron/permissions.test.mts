@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { mkdtemp, mkdir, readFile, rm, symlink, writeFile } from 'node:fs/promises'
+import { mkdtemp, mkdir, readFile, readdir, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { PermissionManager, websiteScope } from './permissions.mjs'
@@ -55,25 +55,6 @@ test('website grants are scoped to an HTTPS origin and can be revoked', async ()
     assert.equal(manager.isAllowed('browser.open', 'http://example.com'), false)
     await manager.revoke(grant.id)
     assert.equal(manager.isAllowed('browser.open', 'https://example.com'), false)
-  } finally { await rm(root, { recursive: true, force: true }) }
-})
-
-test('research autopilot is an independent revocable public-source grant', async () => {
-  const root = await mkdtemp(join(tmpdir(), 'jarvis-permissions-'))
-  try {
-    const file = join(root, 'permissions.json')
-    const manager = new PermissionManager(file)
-    await manager.load()
-    assert.equal(manager.isAllowed('browser.research-autopilot', 'public-https'), false)
-    const grant = await manager.grantResearchAutopilot()
-    assert.equal(manager.isAllowed('browser.research-autopilot', 'public-https'), true)
-    assert.equal(manager.isAllowed('browser.read', 'https://example.com'), false)
-    assert.equal(manager.isAllowed('browser.open', 'https://example.com'), false)
-    const restarted = new PermissionManager(file)
-    await restarted.load()
-    assert.equal(restarted.isAllowed('browser.research-autopilot', 'public-https'), true)
-    await restarted.revoke(grant.id)
-    assert.equal(restarted.isAllowed('browser.research-autopilot', 'public-https'), false)
   } finally { await rm(root, { recursive: true, force: true }) }
 })
 
@@ -180,5 +161,30 @@ test('malformed stores fail closed and concurrent grants do not overwrite each o
     await restarted.load()
     assert.equal(restarted.list().length, 2)
     assert.ok(folders.every((folder) => restarted.isAllowed('files.read', folder)))
+  } finally { await rm(root, { recursive: true, force: true }) }
+})
+
+test('retired research permission is backed up and removed without losing other grants', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'jarvis-permissions-'))
+  try {
+    const file = join(root, 'permissions.json')
+    const manager = new PermissionManager(file)
+    await manager.load()
+    const grant = await manager.grantWebsiteRead('https://example.com')
+    const retired = { ...grant, id: 'ea9878de-7812-4a05-a315-6975dcb39587', capability: 'browser.research-autopilot', scope: 'public-https' }
+    const original = JSON.stringify({ version: 1, permissions: [grant, retired] })
+    await writeFile(file, original)
+
+    const migrated = new PermissionManager(file)
+    await migrated.load()
+    assert.equal(migrated.isAllowed('browser.read', 'https://example.com'), true)
+    assert.deepEqual(migrated.list(), [grant])
+    assert.deepEqual(JSON.parse(await readFile(file, 'utf8')).permissions, [grant])
+    const backups = (await readdir(root)).filter((name) => name.endsWith('.backup'))
+    assert.equal(backups.length, 1)
+    assert.equal(await readFile(join(root, backups[0]), 'utf8'), original)
+
+    await writeFile(file, JSON.stringify({ version: 1, permissions: [grant, { ...retired, scope: 'unrecognized' }] }))
+    await assert.rejects(() => new PermissionManager(file).load(), /could not be loaded safely/)
   } finally { await rm(root, { recursive: true, force: true }) }
 })
