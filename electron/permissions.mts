@@ -3,6 +3,7 @@ import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
 import { realpathSync, statSync } from 'node:fs'
 import { dirname, relative, sep } from 'node:path'
 import { z } from 'zod'
+import { publicOrigin } from './browser-research.mjs'
 
 export const capabilities = {
   'files.read': { category: 'files', description: 'Read files inside a selected folder', risk: 'low' },
@@ -12,6 +13,10 @@ export const capabilities = {
   'apps.open': { category: 'applications', description: 'Open selected applications', risk: 'low' },
   'browser.open': { category: 'browser', description: 'Open selected websites', risk: 'medium' },
   'browser.read': { category: 'browser', description: 'Read pages on selected websites', risk: 'medium' },
+  'browser.scroll': { category: 'browser', description: 'Scroll pages on selected websites', risk: 'medium' },
+  'browser.click': { category: 'browser', description: 'Click page controls on selected websites', risk: 'high' },
+  'browser.readSignedIn': { category: 'browser', description: 'Read selected websites while signed in', risk: 'high' },
+  'browser.interact': { category: 'browser', description: 'Interact with selected websites in a temporary Chrome session', risk: 'high' },
   'voice.record': { category: 'microphone', description: 'Capture microphone audio', risk: 'high' },
   'automation.run': { category: 'automation', description: 'Run approved automations', risk: 'high' },
   'schedule.manage': { category: 'scheduling', description: 'Create and run schedules', risk: 'medium' },
@@ -24,7 +29,7 @@ export const permissionSchema = z.strictObject({
   capability: z.enum(Object.keys(capabilities) as [keyof typeof capabilities, ...(keyof typeof capabilities)[]]),
   scope: z.string().min(1),
   state: z.enum(['granted', 'denied']),
-  source: z.enum(['folder-picker', 'user-decision']),
+  source: z.enum(['folder-picker', 'user-decision', 'automatic-public-read']),
   createdAt: z.iso.datetime(),
   updatedAt: z.iso.datetime(),
   expiresAt: z.iso.datetime().nullable(),
@@ -34,7 +39,7 @@ export const permissionSchema = z.strictObject({
 })
 
 export type Permission = z.infer<typeof permissionSchema>
-const storeSchema = z.strictObject({ version: z.literal(1), permissions: z.array(permissionSchema) })
+const storeSchema = z.strictObject({ version: z.literal(1), permissions: z.array(permissionSchema), settings: z.strictObject({ 'research.useSignedInProfile': z.boolean() }).optional() })
 const legacyPermissionSchema = z.strictObject({
   ...permissionSchema.shape, capability: z.literal('browser.research-autopilot'), scope: z.literal('public-https'),
 })
@@ -67,6 +72,7 @@ export function websiteScope(value: unknown): string {
 
 export class PermissionManager {
   private records: Permission[] = []
+  private signedInResearch = false
   private writing: Promise<void> = Promise.resolve()
 
   constructor(private readonly file: string, private readonly platform: Permission['platform'] = process.platform as Permission['platform']) {}
@@ -78,6 +84,7 @@ export class PermissionManager {
       const current = storeSchema.safeParse(stored)
       if (current.success) {
         this.records = current.data.permissions
+        this.signedInResearch = current.data.settings?.['research.useSignedInProfile'] ?? false
       } else {
         const legacy = legacyStoreSchema.parse(stored)
         this.records = legacy.permissions.filter((record): record is Permission => record.capability !== 'browser.research-autopilot')
@@ -91,6 +98,17 @@ export class PermissionManager {
 
   list(): Permission[] {
     return this.records.map((record) => ({ ...record }))
+  }
+
+  useSignedInProfile(): boolean {
+    return this.signedInResearch
+  }
+
+  async setSignedInProfile(enabled: boolean): Promise<void> {
+    await this.serialize(async () => {
+      this.signedInResearch = enabled
+      await this.persist()
+    })
   }
 
   async grantFolder(folder: string): Promise<Permission> {
@@ -140,6 +158,50 @@ export class PermissionManager {
     const scope = websiteScope(value)
     return this.save({
       id: randomUUID(), capability: 'browser.read', scope, state: 'granted', source: 'user-decision',
+      createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+      expiresAt: null, revokedAt: null, platform: this.platform, version: 1,
+    })
+  }
+
+  async allowPublicRead(value: unknown): Promise<boolean> {
+    const scope = websiteScope(value)
+    await publicOrigin(scope)
+    return this.serialize(async () => {
+      if (this.isAllowed('browser.read', scope)) return true
+      if (this.records.some((record) => record.capability === 'browser.read' && record.scope === scope && record.platform === this.platform && (record.revokedAt || record.state === 'denied'))) return false
+      this.records.push(permissionSchema.parse({
+        id: randomUUID(), capability: 'browser.read', scope, state: 'granted', source: 'automatic-public-read',
+        createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+        expiresAt: null, revokedAt: null, platform: this.platform, version: 1,
+      }))
+      await this.persist()
+      return true
+    })
+  }
+
+  async grantBrowserAction(value: unknown, action: 'scroll' | 'click'): Promise<Permission> {
+    const scope = websiteScope(value)
+    if (action !== 'scroll' && action !== 'click') throw new Error('Invalid browser action.')
+    return this.save({
+      id: randomUUID(), capability: `browser.${action}`, scope, state: 'granted', source: 'user-decision',
+      createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+      expiresAt: null, revokedAt: null, platform: this.platform, version: 1,
+    })
+  }
+
+  async grantWebsiteInteract(value: unknown): Promise<Permission> {
+    const scope = websiteScope(value)
+    return this.save({
+      id: randomUUID(), capability: 'browser.interact', scope, state: 'granted', source: 'user-decision',
+      createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+      expiresAt: null, revokedAt: null, platform: this.platform, version: 1,
+    })
+  }
+
+  async grantWebsiteSignedInRead(value: unknown): Promise<Permission> {
+    const scope = websiteScope(value)
+    return this.save({
+      id: randomUUID(), capability: 'browser.readSignedIn', scope, state: 'granted', source: 'user-decision',
       createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
       expiresAt: null, revokedAt: null, platform: this.platform, version: 1,
     })
@@ -207,7 +269,7 @@ export class PermissionManager {
 
   private async persist(): Promise<void> {
     const temp = `${this.file}.${randomUUID()}.tmp`
-    const payload = JSON.stringify(storeSchema.parse({ version: 1, permissions: this.records }))
+    const payload = JSON.stringify(storeSchema.parse({ version: 1, permissions: this.records, settings: { 'research.useSignedInProfile': this.signedInResearch } }))
     try {
       await mkdir(dirname(this.file), { recursive: true, mode: 0o700 })
       await writeFile(temp, payload, { mode: 0o600 })

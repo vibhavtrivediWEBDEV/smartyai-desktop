@@ -9,6 +9,7 @@
     "build:desktop": "tsc -p tsconfig.electron.json",
     "build": "tsc -b && npm run build:desktop && vite build",
     "test": "npm run build:desktop && node --test desktop-dist/electron/*.test.mjs",
+    "test:browser-use": "browser-use/.venv/bin/python -m unittest discover -s electron -p 'test_browser_use_worker.py'",
     "start": "electron .",
     "lint": "oxlint",
     "preview": "vite preview"
@@ -16,6 +17,7 @@
   "dependencies": {
     "dotenv": "^18.0.7",
     "lucide-react": "^1.55.0",
+    "mongodb": "^7.7.0",
     "playwright-core": "^1.64.0",
     "react": "^19.2.8",
     "react-dom": "^19.2.8",

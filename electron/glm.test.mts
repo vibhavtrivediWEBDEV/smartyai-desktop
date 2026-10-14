@@ -1,6 +1,33 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { askGLM, askGLMWithTools, glmKey, glmProvider } from './glm.mjs'
+import { askGLM, askGLMBrowser, askGLMWithTools, glmKey, glmProvider } from './glm.mjs'
+
+test('GLM browser actions are validated and observations are returned to the model', async () => {
+  const requests: Record<string, unknown>[] = []
+  const actions: string[] = []
+  const answer = await askGLMBrowser('inspect example.com', new AbortController().signal, async (action) => {
+    actions.push(action.action)
+    return 'Observed Example Domain at https://example.com'
+  }, 'test-key', async (_input, init) => {
+    const body = JSON.parse(String(init?.body)) as Record<string, unknown>
+    requests.push(body)
+    if (requests.length === 1) return Response.json({ choices: [{ message: { content: null, tool_calls: [{ id: 'browser-1', type: 'function', function: { name: 'browser_action', arguments: '{"action":"navigate","url":"https://example.com"}' } }] } }] })
+    return Response.json({ choices: [{ message: { content: 'Example Domain was observed.' } }] })
+  })
+  assert.equal(answer, 'Example Domain was observed.')
+  assert.deepEqual(actions, ['navigate'])
+  assert.deepEqual((requests[0].tools as { function: { name: string } }[]).map((tool) => tool.function.name), ['browser_action'])
+  assert.deepEqual((requests[1].messages as Record<string, unknown>[]).at(-1), { role: 'tool', tool_call_id: 'browser-1', content: 'Observed Example Domain at https://example.com' })
+})
+
+test('GLM browser loop rejects unsupported and malformed actions without executing', async () => {
+  for (const args of ['{"action":"run_shell"}', '{"action":"click","selector":"a","extra":true}', '{"action":"navigate","url":"x",']) {
+    let called = false
+    await assert.rejects(() => askGLMBrowser('test', new AbortController().signal, async () => { called = true; return 'done' }, 'test-key', async () =>
+      Response.json({ choices: [{ message: { content: null, tool_calls: [{ id: 'browser-1', type: 'function', function: { name: 'browser_action', arguments: args } }] } }] })), /invalid browser action arguments/)
+    assert.equal(called, false)
+  }
+})
 
 test('structured GLM tool calls require a handler and return their results to the model', async () => {
   const requests: Record<string, unknown>[] = []

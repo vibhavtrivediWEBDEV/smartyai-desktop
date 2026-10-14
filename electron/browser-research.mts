@@ -2,8 +2,19 @@ import { lookup } from 'node:dns/promises'
 import { isIP } from 'node:net'
 import { chromium, type Route } from 'playwright-core'
 import type { PermissionManager } from './permissions.mjs'
+import { ChromeProfile, chromeExecutable } from './chrome-profile.mjs'
 
-const chrome = '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome'
+export async function launchResearchChrome(profile: ChromeProfile | null, launch: typeof chromium.launchPersistentContext = (directory, options) => chromium.launchPersistentContext(directory, options)) {
+  const release = profile?.acquire()
+  try {
+    if (profile) await profile.ensureDirectory()
+    const context = await launch(profile?.directory ?? '', {
+      executablePath: chromeExecutable, headless: false, args: ['--disable-extensions'], acceptDownloads: false,
+      serviceWorkers: 'block', ...(profile ? { javaScriptEnabled: false } : {}),
+    })
+    return { context, release: () => release?.() }
+  } catch (error) { release?.(); throw error }
+}
 const blockedAddress = (address: string) => {
   const value = address.toLowerCase()
   if (value.includes(':')) return !/^(2|3)[0-9a-f]{3}:/.test(value) || value.startsWith('2001:db8:')
@@ -69,9 +80,38 @@ export function combineResearchResults(providerResults: string[][]): string[] {
   return links
 }
 
+export function selectResearchSites(urls: string[], limit = 2): string[] {
+  const origins = new Set<string>()
+  return urls.filter((url) => {
+    const origin = new URL(url).origin
+    if (origins.has(origin) || origins.size >= limit) return false
+    origins.add(origin)
+    return true
+  })
+}
+
+export function researchFallbackAllowed(error: unknown): boolean {
+  return error instanceof Error && /^(?:Browser-use stopped without a verified result\.|Browser-use timed out after twelve minutes without a verified result\.)$/.test(error.message)
+}
+
+export async function inspectResearchSites(
+  task: string, urls: string[], signal: AbortSignal, inspect: (request: string) => Promise<string>,
+): Promise<string> {
+  const results: string[] = []
+  for (const url of selectResearchSites(urls)) {
+    if (signal.aborted) throw new Error('Cancelled')
+    const result = await inspect(`${task}\nInspect ${url} for the requested information. Report only what this site confirms.`)
+    results.push(`${url}\n${result}`)
+  }
+  if (!results.length) throw new Error('Research found no readable public sites for browser-use.')
+  return results.join('\n\n')
+}
+
 export async function researchBrowser(
   query: string, permissions: PermissionManager, approve: (origin: string) => Promise<boolean>,
   summarize: (evidence: string, signal: AbortSignal) => Promise<string>, signal: AbortSignal,
+  profile: ChromeProfile | null = null,
+  onSources?: (urls: string[]) => void,
 ): Promise<string> {
   if (signal.aborted) throw new Error('Cancelled')
   if (process.platform !== 'darwin') throw new Error('Controlled Chrome research is currently available only on macOS.')
@@ -79,18 +119,17 @@ export async function researchBrowser(
   const target = directResearchUrl(query)
   const phoneDigits = /^"(\d{8,15})" phone number$/.exec(query)?.[1]
   const targetOrigin = target ? await publicOrigin(target) : null
-  const searchContext = await chromium.launchPersistentContext('', {
-    executablePath: chrome, headless: false, args: ['--disable-extensions'], acceptDownloads: false, serviceWorkers: 'block',
-  })
+  const { context: searchContext, release } = await launchResearchChrome(profile)
   const browser = searchContext.browser()
-  if (!browser) { await searchContext.close(); throw new Error('Research Chrome browser is unavailable.') }
+  if (!browser) { await searchContext.close(); release(); throw new Error('Research Chrome browser is unavailable.') }
   const stop = () => { void searchContext.close() }
   signal.addEventListener('abort', stop, { once: true })
   const approved = new Set<string>()
   const denied = new Set<string>()
+  const readCapability = profile ? 'browser.readSignedIn' : 'browser.read'
   try {
     if (signal.aborted) throw new Error('Cancelled')
-    const context = await browser.newContext({ javaScriptEnabled: false, acceptDownloads: false, serviceWorkers: 'block' })
+    const context = profile ? searchContext : await browser.newContext({ javaScriptEnabled: false, acceptDownloads: false, serviceWorkers: 'block' })
     const page = await context.newPage()
     const searchPage = await searchContext.newPage()
     page.setDefaultNavigationTimeout(12000)
@@ -100,7 +139,7 @@ export async function researchBrowser(
       const url = new URL(request.url())
       if (signal.aborted || request.method() !== 'GET' ||
         !['https://www.google.com', 'https://www.gstatic.com', 'https://search.brave.com', 'https://html.duckduckgo.com'].includes(url.origin) ||
-        !permissions.isAllowed('browser.read', url.origin === 'https://www.gstatic.com' ? 'https://www.google.com' : url.origin) ||
+        !permissions.isAllowed(readCapability, url.origin === 'https://www.gstatic.com' ? 'https://www.google.com' : url.origin) ||
         (request.isNavigationRequest() && request.frame() !== searchPage.mainFrame())) {
         await route.abort().catch(() => {})
         return
@@ -121,7 +160,7 @@ export async function researchBrowser(
           if (!await approve(origin)) { denied.add(origin); await route.abort(); return }
           approved.add(origin)
         }
-        if (signal.aborted || !permissions.isAllowed('browser.read', origin)) { await route.abort(); return }
+        if (signal.aborted || !permissions.isAllowed(readCapability, origin)) { await route.abort(); return }
         await route.continue()
       } catch { await route.abort().catch(() => {}) }
     })
@@ -168,6 +207,7 @@ export async function researchBrowser(
     const links = target ? [target] : await search(query)
     const visited = new Set<string>()
     const sources: { url: string; text: string }[] = []
+    let directFailure = 'The page could not be loaded in research Chrome.'
     const inspect = async (candidates: string[], limit: number) => {
       for (const link of candidates) {
         if (signal.aborted) throw new Error('Cancelled')
@@ -175,21 +215,28 @@ export async function researchBrowser(
         visited.add(link)
         try {
           const origin = await publicOrigin(link)
-          if (denied.has(origin)) continue
+          if (denied.has(origin)) { if (target) directFailure = 'Website read access was not approved.'; continue }
           const response = await page.goto(link, { waitUntil: 'domcontentloaded' })
-          if (!response?.ok() || !/text\/html/i.test(response.headers()['content-type'] || '')) continue
-          if (!permissions.isAllowed('browser.read', await publicOrigin(page.url()))) continue
-          if (targetOrigin && new URL(page.url()).origin !== targetOrigin) continue
+          if (!response?.ok()) { if (target) directFailure = `The website returned HTTP ${response?.status() ?? 'no response'}.`; continue }
+          if (!/text\/html/i.test(response.headers()['content-type'] || '')) { if (target) directFailure = 'The response was not an HTML page.'; continue }
+          if (!permissions.isAllowed(readCapability, await publicOrigin(page.url()))) { if (target) directFailure = 'Website read access was not approved for the final page.'; continue }
+          if (targetOrigin && new URL(page.url()).origin !== targetOrigin) { directFailure = 'The website redirected to a different origin.'; continue }
           const text = await page.locator('body').innerText({ timeout: 5000 })
-          if (!permissions.isAllowed('browser.read', await publicOrigin(page.url()))) continue
+          if (!permissions.isAllowed(readCapability, await publicOrigin(page.url()))) continue
           const excerpt = text.replace(/\s+/g, ' ').slice(0, 4500)
           if (phoneDigits && !exactPhoneMatch(excerpt, phoneDigits)) continue
           if (text.trim().length >= 180) sources.push({ url: page.url(), text: excerpt })
-        } catch { if (signal.aborted) throw new Error('Cancelled') }
+          else if (target) directFailure = 'The page had too little readable text with scripts disabled; it may require JavaScript or a login.'
+        } catch (error) {
+          if (signal.aborted) throw new Error('Cancelled')
+          if (target) directFailure = denied.has(new URL(link).origin) ? 'Website read access was not approved.'
+            : error instanceof Error && error.name === 'TimeoutError' ? 'The website did not finish loading within 12 seconds.'
+              : 'Chrome could not load the page; the network request may have failed or been blocked.'
+        }
       }
     }
     await inspect(links, 3)
-    if (target && !sources.length) throw new Error(`Could not read ${target} directly. No answer was generated from other websites.`)
+    if (target && !sources.length) throw new Error(`Could not read ${target} directly. ${directFailure} No answer was generated from other websites.`)
     if (!target && sources.length < (phoneDigits ? 1 : 2) && links.length) {
       const host = new URL(links[0]).hostname
       await inspect(await search(`${query} site:${host}`), 4)
@@ -201,14 +248,16 @@ export async function researchBrowser(
     if (phoneDigits && !sources.length) throw new Error(`No readable public page with the exact number ${phoneDigits} was found. Jarvis cannot verify who it belongs to.`)
     if (!target && !phoneDigits && sources.length < 2) throw new Error(`Only ${sources.length} readable source(s) found. Approve at least two sites and retry; no comparison was generated.`)
     if (signal.aborted) throw new Error('Cancelled')
-    if (sources.some((source) => !permissions.isAllowed('browser.read', new URL(source.url).origin))) {
+    if (sources.some((source) => !permissions.isAllowed(readCapability, new URL(source.url).origin))) {
       throw new Error('A website read grant was revoked during research. No page text was sent to GLM-5.')
     }
+    onSources?.(sources.map((source) => source.url))
     const evidence = sources.map((source, index) => `[${index + 1}] ${source.url}\n${source.text}`).join('\n\n')
     const answer = await summarize(evidence, signal)
     return `${answer}\n\nSources inspected:\n${sources.map((source, index) => `[${index + 1}] ${source.url}`).join('\n')}`
   } finally {
     signal.removeEventListener('abort', stop)
-    await searchContext.close().catch(() => {})
+    try { await searchContext.close().catch(() => {}) }
+    finally { release() }
   }
 }

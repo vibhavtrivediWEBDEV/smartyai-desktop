@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import { existsSync } from 'node:fs'
 import { test } from 'node:test'
 import { chromium } from 'playwright-core'
-import { combineResearchResults, directResearchUrl, exactPhoneMatch, googleSearchError, publicOrigin, researchLink } from './browser-research.mjs'
+import { combineResearchResults, directResearchUrl, exactPhoneMatch, googleSearchError, inspectResearchSites, publicOrigin, researchFallbackAllowed, researchLink, selectResearchSites } from './browser-research.mjs'
 
 test('research links reject internal, credentialed and non-HTTPS destinations', () => {
   assert.equal(researchLink('/url?q=https%3A%2F%2Fexample.com%2Farticle'), 'https://example.com/article')
@@ -25,6 +25,38 @@ test('results from each readable search engine are interleaved and deduplicated'
     ['https://example.com/c'],
   ]), ['https://example.com/a', 'https://example.com/c', 'https://example.com/b', 'https://www.instagram.com/public_profile/'])
   assert.deepEqual(combineResearchResults([[], ['https://example.com/only']]), ['https://example.com/only'])
+})
+
+test('discovered sites are inspected sequentially on distinct origins and cancellation stops the next visit', async () => {
+  const urls = ['https://example.com/first', 'https://example.com/second', 'https://example.org/third']
+  assert.deepEqual(selectResearchSites(urls), [urls[0], urls[2]])
+  const requests: string[] = []
+  const controller = new AbortController()
+  const result = await inspectResearchSites('compare options', urls, controller.signal, async (request) => {
+    requests.push(request)
+    return `Read site ${requests.length}`
+  })
+  assert.deepEqual(requests, [
+    `compare options\nInspect ${urls[0]} for the requested information. Report only what this site confirms.`,
+    `compare options\nInspect ${urls[2]} for the requested information. Report only what this site confirms.`,
+  ])
+  assert.match(result, /https:\/\/example\.org\/third\nRead site 2/)
+  requests.length = 0
+  await assert.rejects(inspectResearchSites('compare options', urls, controller.signal, async (request) => {
+    requests.push(request)
+    controller.abort()
+    return 'Read first site'
+  }), /Cancelled/)
+  assert.equal(requests.length, 1)
+  await assert.rejects(inspectResearchSites('compare options', [], new AbortController().signal, async () => 'unused'), /no readable public sites/)
+})
+
+test('only unverified browser-use results allow an evidence-backed research fallback', () => {
+  assert.equal(researchFallbackAllowed(new Error('Browser-use stopped without a verified result.')), true)
+  assert.equal(researchFallbackAllowed(new Error('Browser-use timed out after twelve minutes without a verified result.')), true)
+  for (const message of ['Browser action denied or cancelled.', 'Cancelled', 'Reading site was not approved.', 'Browser-use failed.']) {
+    assert.equal(researchFallbackAllowed(new Error(message)), false)
+  }
 })
 
 test('research refuses private network and non-HTTPS origins', async () => {

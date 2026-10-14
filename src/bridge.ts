@@ -5,6 +5,10 @@ export interface Task {
   request: string
   state: TaskState
   detail: string
+  busContext?: string
+  rideContext?: string
+  steps?: string[]
+  awaitingReply?: boolean
   createdAt: string
   updatedAt: string
 }
@@ -17,6 +21,15 @@ export interface PermissionView {
   expiresAt: string | null
   revokedAt: string | null
   platform: string
+}
+
+export interface FormDetails {
+  id: string
+  origin: string
+  name: string
+  email: string
+  phone: string
+  address: string
 }
 
 export interface PythonProposal {
@@ -43,11 +56,24 @@ export interface VSCodeProjects {
 
 export interface JarvisBridge {
   runCommand: (request: string) => Promise<Task>
+  newConversation: () => Promise<void>
   cancelTask: (id: string) => Promise<Task | null>
+  replyToTask: (id: string, message: string) => Promise<boolean>
   listTasks: () => Promise<Task[]>
   onTask: (listener: (task: Task) => void) => () => void
   onFocusCommand: (listener: () => void) => () => void
   listPermissions: () => Promise<PermissionView[]>
+  allowBrowserAction: (origin: string, action: 'read' | 'scroll' | 'click') => Promise<PermissionView | null>
+  listFormDetails: () => Promise<FormDetails[]>
+  getLocation: () => Promise<string | null>
+  saveLocation: (value: string) => Promise<string | null>
+  deleteLocation: () => Promise<string | null>
+  saveFormDetails: (input: Omit<FormDetails, 'id'>) => Promise<FormDetails | null>
+  deleteFormDetails: (id: string) => Promise<boolean>
+  onContactRequest: (listener: (request: { origin: string, field: 'name' | 'email' | 'phone' | 'address' }) => void) => () => void
+  skipContactRequest: (origin: string) => Promise<void>
+  signedInResearchStatus: () => Promise<boolean>
+  setSignedInResearch: (enabled: boolean) => Promise<boolean>
   addReadFolder: (folder: string) => Promise<PermissionView>
   allowVSCode: () => Promise<PermissionView | null>
   openVSCode: () => Promise<void>

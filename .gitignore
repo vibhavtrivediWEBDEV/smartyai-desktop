@@ -13,6 +13,9 @@ dist
 desktop-dist
 dist-ssr
 *.local
+/browser-use/.venv/
+__pycache__/
+*.pyc
 
 # Editor directories and files
 .vscode/*

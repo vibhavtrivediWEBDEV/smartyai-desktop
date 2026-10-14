@@ -32,7 +32,7 @@ export function parseWebSearch(request: string): { url: string, browser: 'safari
 }
 
 export function parseBrowserResearch(request: string): string | null {
-  const match = /^(?:please\s+)?(?:research|reserch)(?::|\s+)\s*(.{1,200})$/i.exec(request.trim())
+  const match = /^(?:please\s+)?(?:research|reserch|reseach)(?::|\s+)\s*(.{1,200})$/i.exec(request.trim())
   const query = match?.[1].trim()
   if (!query || /[\r\n]/.test(query)) return null
   const number = parseLiveResearch(query.replace(/\s+in google$/i, ' on google'))
@@ -41,6 +41,20 @@ export function parseBrowserResearch(request: string): string | null {
 
 export function parseLiveResearch(request: string): string | null {
   const text = request.trim().replace(/[?.!]$/, '').trim()
+  if (text.length <= 200 && !/[\r\n]/.test(text)) {
+    const topic = text.replace(/https:\/\/[^\s<>"']+/gi, (url) => {
+      try { return new URL(url).hostname } catch { return url }
+    })
+    if (/\b(?:train|express|railway)\b/i.test(text) && /\b(?:timings?|schedule|departure|arrival|time|kal|tomorrow)\b/i.test(text)) {
+      return topic.replace(/\bkal\b/gi, 'tomorrow')
+    }
+    if (/\b(?:compare|compair|comparison)\b/i.test(text) && text.split(/\s+/).length >= 3) return topic
+    if (/https:\/\/[^\s<>"']+/i.test(text) && /\b(?:what|which|when|where|how|kya|kitne|timings?|schedule|prices?|rates?|latest|today|tomorrow)\b/i.test(text)
+      && !/^(?:open|launch|start|visit|inspect|browse|read|check|look at)\b/i.test(text)) return topic
+    if (/^(?:what|which|when|where|how|who|compare|find|show|check)\b/i.test(text)
+      && /\b(?:website|site|online|web|latest|current|today|availability|prices?|fares?|reviews?|schedule|timings?)\b|https:\/\/|\b[a-z0-9-]+\.[a-z]{2,}\b/i.test(text)
+      && !/\b(?:files?|folders?|documents?|screenshots?)\b|\b[\w-]+\.(?:txt|pdf|md|json|csv|docx?|xlsx?|png|jpe?g)\b/i.test(text)) return topic
+  }
   const weather = /^(?:what(?:'s| is)\s+)?(?:the\s+)?(?:(.{2,60}?)\s+(?:weather|forecast)|(?:weather|forecast)\s+(?:in|for)\s+(.{2,60}?))(?:\s+(?:today|now))?$/i.exec(text)
   if (weather) return `${(weather[1] || weather[2]).trim()} weather today`
   const numberLookup = /^(?:(?:search(?:\s+for)?|look\s+up|google|find\s+(?:info(?:rmation)?\s+(?:about|on)\s+)?|whose\s+number\s+is|who\s+owns|(?:what(?:'s| is)\s+)?(?:the\s+)?(?:owner\s+of\s+)?(?:phone\s+)?number(?:\s+for)?)\s+)?(\+?\d[\d\s()-]*\d)(?:\s+(?:on\s+google|phone\s+number))?$/i.exec(text)
@@ -48,6 +62,14 @@ export function parseLiveResearch(request: string): string | null {
   if (digits && digits.length >= 8 && digits.length <= 15) return `"${digits}" phone number`
   const contact = /^(?:what(?:'s| is)\s+)?(?:the\s+)?(.{2,80}?)\s+(?:phone|contact)\s+number$/i.exec(text)
   return contact ? `${contact[1].trim()} official contact phone number` : null
+}
+
+export function parseWebsiteAction(request: string): string | null {
+  const text = request.trim()
+  if (text.length > 1000 || /[\r\n]/.test(text)) return null
+  return /^(?:(?:please|can you|could you)\s+)?(?:click|fill|select|submit|add to cart|sign in|log in|book|buy|order)\b/i.test(text)
+    && (/https:\/\/[^\s<>"']+|\b[a-z0-9-]+(?:\.[a-z0-9-]+)+\b/i.test(text)
+      || /\b(?:on|at)\s+(?:the\s+)?[a-z][a-z0-9-]{2,}(?:\s+(?:site|website))?[.!?]?$/i.test(text)) ? text : null
 }
 
 export function parseFolderOpen(request: string): 'downloads' | null {
@@ -63,8 +85,20 @@ export function parseWebsiteOpen(request: string): string | null {
   } catch { return null }
 }
 
+export function isNearbyRestaurantSearch(request: string): boolean {
+  return /\b(?:find|show|search for)\b.*\b(?:restaurants?|restraunts?)\b.*\b(?:near|nearby|around|within)\b/i.test(request)
+    || /^(?:(?:browse|browser)-use\s*:\s*)?(?:the\s+)?(?:restaurants?|restraunts?)\b.*\b(?:near|nearby|around|within)\b/i.test(request.trim())
+}
+
 export function parseFileSearch(request: string): string | null {
   const normalized = request.trim().replace(/[?.!]$/, '').trim()
+  if (isNearbyRestaurantSearch(normalized)) return null
+  if (/\bdomino(?:'s|s)?\b/i.test(normalized)
+    && /\b(?:order|buy|nearest|nearby)\b/i.test(normalized)
+    && !/\b(?:file|filename|folder|desktop|documents|downloads)\b/i.test(normalized)) return null
+  if (/\b(?:bus|buses|train|flight|flights)\b/i.test(normalized)
+    && /\b(?:for|from|to|on|near|next|today|tomorrow|monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b/i.test(normalized)
+    && !/\b(?:file|filename|folder|desktop|documents|downloads)\b/i.test(normalized)) return null
   if (/\bscreenshots?\b/i.test(normalized) && /\b(?:today'?s?|yesterday|last|on|from|for|of|show|find|search|date|\d{4}-\d{2}-\d{2})\b/i.test(normalized)) return normalized.toLowerCase()
   const location = /^(?:(?:hi|hello|hey)[,!\s]+)?(?:(?:desktop\s+(?:me|pe)\s+)?(?:mera|meri|my)\s+)?(.{1,200}?)\s+(?:kaha(?:n)?|kidhar)\s+(?:h|hai|he)$/i.exec(normalized)
   if (location) return location[1].trim()
